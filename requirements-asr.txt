@@ -1,0 +1,7 @@
+# 语音转写与音频预检依赖（约 2~3 GB，含 CUDA 运行库）
+# CPU 用户同样可用，只是 large-v3 会很慢（建议改 asr.model: small 或 medium）
+faster-whisper>=1.0
+ctranslate2>=4.0         # faster-whisper 的后端（实测用它探测本机支持的 compute_type）
+onnxruntime>=1.17        # silero VAD 用（音频预检 s2b_probe）
+# GPU：装对应 CUDA 版的 cuBLAS（faster-whisper 依赖），
+#      Windows 经验做法：pip install nvidia-cublas-cu12

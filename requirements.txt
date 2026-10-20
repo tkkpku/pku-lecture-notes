@@ -1,0 +1,8 @@
+# 核心依赖（只跑「抽取/融合/发布」需要这一组）
+PyYAML>=6.0
+httpx>=0.27          # 直连 LLM
+Pillow>=10.0         # 关键帧缩放与 JPEG 编码
+numpy>=1.26          # pHash 变化检测
+
+# ASR 与预检（体积大，按需安装；没有 GPU 也能跑，只是慢）
+#   pip install -r requirements-asr.txt

@@ -1,0 +1,144 @@
+# 配置模板。复制成 config/config.yaml 后修改。
+# 必须保存为 UTF-8 无 BOM，否则 PyYAML 解析失败。
+# 相对路径按项目根解析，不是按当前工作目录。
+
+paths:
+  # 视频、音频、帧、ASR 产物的存放位置。体积大，建议非系统盘。
+  data_root: "data"
+  # 讲义输出目录，任意 Markdown 库均可。留空则只出草稿，publish 会拒绝执行。
+  obsidian_vault: ""
+  # 讲义在库中的子目录，不存在会自动创建。
+  notes_library: "02_随堂讲义"
+  # 外部工具。留空表示从 PATH 查找。
+  pku3b_exe: ""        # 仅 fetch 阶段需要
+  ffmpeg_dir: ""       # 留空则用 PATH 里的 ffmpeg
+  venv_python: ""      # 历史遗留键，留空即可
+
+# LLM 直连（OpenAI 兼容 /chat/completions）。
+# 走直连而不是调用 agent 的原因见 docs/ARCHITECTURE.md。
+llm:
+  mode: "direct"                       # direct 为直连；dsh 为旧路径，一般不用
+  base_url: "https://api.deepseek.com/v1"
+  key_env: "LLM_API_KEY"               # 密钥所在的环境变量名，不要写密钥本身
+  model: "deepseek-chat"               # 读图阶段需要多模态模型
+  timeout_sec: 150
+  max_retries: 2
+  max_image_side: 1024                 # 控制请求体大小
+  jpeg_quality: 75
+
+# 阶段 1：从教学网下载。已有 mp4 时整段跳过。
+fetch:
+  pku3b_config: ""      # 留空用 pku3b 自身默认
+  concurrency: 1
+  max_duration_min: 200 # 超过此长度视为异常
+
+# 阶段 2a：音轨
+audio:
+  sample_rate: 16000
+  channels: 1
+  codec: "pcm_s16le"
+
+# 阶段 2a-pre：素材音频预检，避免无声素材白跑整条链路
+probe:
+  enabled: true
+  windows: 3            # 在 10%、50%、85% 处各取一个窗口
+  sec: 60
+
+# 阶段 2b：语音转写
+asr:
+  model: "large-v3"              # 显存不足降 medium 或 small
+  device: "auto"                 # auto / cuda / cpu
+  compute_type: "float16"        # 有 GPU 时显式指定，不要留 auto，原因见 docs/PITFALLS.md §8
+  language: "zh"
+  beam_size: 5
+  # 必须为假。为真会把上一段的解码结果当作下一段的提示，导致幻觉传染全片。
+  condition_on_previous_text: false
+  vad_filter: true
+  vad_min_silence_ms: 500
+  # 给模型的领域提示，改成你的学科
+  initial_prompt: "以下是大学本科课堂的录音，老师讲授理工科内容，可能包含数学公式、物理概念与工程术语。"
+  hotwords: []                   # 术语热词，长列表放 config/terms.txt
+  corrections: {}                # 同音字纠正，例 {硬力: 应力}
+  # 模型下载源用环境变量 HF_ENDPOINT 覆盖，默认 https://hf-mirror.com
+
+# 幻觉过滤。逐项原因见 docs/PITFALLS.md §1~§3
+hallucination:
+  no_speech_prob: 0.6            # 仅在 vad_filter 为假时生效
+  no_speech_prob_when_vad: 0.95
+  min_avg_logprob: -1.0
+  max_compression_ratio: 2.4
+  repeat_run: 3                  # 短文本连续重复次数阈值
+  repeat_run_long: 8             # 长文本阈值
+  repeat_run_short_maxlen: 4
+  blocklist:
+    - "点赞.{0,6}(订阅|转发|打赏|关注)"
+    - "订阅.{0,6}(转发|打赏|频道)"
+    - "打赏|赞赏"
+    - "感谢观看|谢谢观看|感谢您的观看|感谢收看"
+    - "字幕(由|志愿|组|君)|字幕组"
+    - "请不吝"
+    - "下期再见|我们下期|下集再见"
+    - "优优独播|YoYo ?Television"
+    - "amara\\.org|MING PAO"
+
+# 阶段 2c：关键帧
+frames:
+  mode: "hash"             # hash 推荐；scene 对课堂 PPT 会漏检；interval 为固定间隔
+  sample_sec: 2
+  hash_change_threshold: 6
+  hash_crop_right: 320     # 只对主区域算哈希，避开右侧教室小窗
+  scene_threshold: 0.01
+  min_gap_sec: 8
+  max_frames: 120          # 单讲上限
+  phash_threshold: 6
+  resize_width: 1280
+  interval_sec: 30
+
+# 阶段 2d：帧文字理解
+vision:
+  backend: "vlm"           # vlm 默认；winocr 免费但真实录播上不可用；hybrid 先 OCR 再升级
+  audio_only_courses: []   # 纯音频课程，不抽帧不读图
+  ocr_escalate_min_chars: 8
+  max_vlm_calls_per_lecture: 200
+  vlm:
+    batch_size: 5          # 每批图片数，主要成本杠杆
+    timeout_sec: 300
+    # 以下三项只对旧路径 llm.mode: dsh 有意义，直连模式留空
+    provider: ""
+    model: ""
+    pin_model: false
+
+# 阶段 3：融合
+fuse:
+  align_tolerance_sec: 20
+  segment_mode: "anchor"   # anchor 按关键帧切分；fixed 按固定时长
+  segment_max_min: 20      # 块越大调用越少，但长输出易漏内容
+  segment_max_chars: 20000 # 防止命令行超过 Windows 32767 字符上限
+  fidelity:
+    polish_colloquial: true      # 去掉语气碎片，保留讲课习惯
+    fill_from_context: true      # 听漏处按上下文补全，补不出就标 [听不清]
+    no_external_knowledge: true  # 不引入老师没讲的内容
+    dedup_repetition: true
+    on_topic_only: true          # 跑题只留与学习相关的
+    factual_normalize: true      # 可改正口误与同音字造成的事实错误
+    no_textbook_alignment: true  # 不对齐课本写法
+
+# 阶段 4：发布
+publish:
+  filename_template: "{date}_第{index:02d}讲_{topic}.md"
+  source: ""               # 写进 frontmatter 的来源说明
+  frontmatter: true
+  update_index: true
+  auto_cleanup: true       # 发布后清理视频、音频、帧
+  keep_artifacts:
+    - "asr.srt"
+    - "meta.json"
+    - "frames_index.json"
+
+cleanup:
+  enabled: true
+  delete_video: true
+  delete_audio: true
+  delete_frames: true
+  verify_note_exists: true # 讲义不存在则不删
+  min_note_bytes: 2000
